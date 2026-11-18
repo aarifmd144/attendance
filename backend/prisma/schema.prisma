@@ -1,0 +1,600 @@
+// Prisma Schema for Attendance Management System
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum Role {
+  ADMIN
+  EMPLOYEE
+  FOOD_OWNER
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  LATE
+  ON_LEAVE
+  HOLIDAY
+  WEEK_OFF
+  MISSING_CHECKOUT
+}
+
+enum LeaveType {
+  CASUAL
+  SICK
+  EMERGENCY
+  PERMISSION
+  OTHER
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum CorrectionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum FoodOrderStatus {
+  PENDING
+  ACCEPTED
+  PREPARING
+  READY
+  DELIVERED
+  CANCELLED
+}
+
+enum AuditAction {
+  EMPLOYEE_ADDED
+  EMPLOYEE_UPDATED
+  EMPLOYEE_DELETED
+  EMPLOYEE_STATUS_CHANGED
+  ATTENDANCE_MODIFIED
+  ATTENDANCE_ENTRY_MARKED
+  ATTENDANCE_EXIT_MARKED
+  BREAK_STARTED
+  BREAK_ENDED
+  LEAVE_APPLIED
+  LEAVE_APPROVED
+  LEAVE_REJECTED
+  CORRECTION_APPROVED
+  CORRECTION_REJECTED
+  SETTINGS_UPDATED
+  HOLIDAY_ADDED
+  HOLIDAY_DELETED
+  DEPARTMENT_ADDED
+  USER_LOGIN
+  USER_LOGOUT
+  USER_REGISTERED
+  FOOD_ORDER_CREATED
+  FOOD_ORDER_STATUS_CHANGED
+  FOOD_ITEM_CREATED
+  FOOD_ITEM_UPDATED
+  FOOD_ITEM_DELETED
+}
+
+// ============================================================
+// USERS
+// ============================================================
+
+model User {
+  id            String        @id @default(cuid())
+  email         String        @unique
+  password      String
+  role          Role          @default(EMPLOYEE)
+  isRegistered  Boolean       @default(false)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  employee      Employee?
+  refreshTokens RefreshToken[]
+  notifications Notification[]
+  auditLogs     AuditLog[]    @relation("AuditUser")
+  adminAuditLogs AuditLog[]   @relation("AuditAdmin")
+  lastSeenAt        DateTime?
+  chatParticipants  ChatParticipant[]
+  sentMessages      ChatMessage[]     @relation("SentMessages")
+  chatNotifications ChatNotification[]
+  chatTheme         UserChatTheme?
+  createdConversations ChatConversation[] @relation("CreatedConversations")
+  initiatedCalls    CallRecord[]      @relation("InitiatedCalls")
+  callParticipants  CallParticipant[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+// ============================================================
+// DEPARTMENTS
+// ============================================================
+
+model Department {
+  id          String     @id @default(cuid())
+  name        String     @unique
+  description String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  employees Employee[]
+
+  @@map("departments")
+}
+
+// ============================================================
+// EMPLOYEES
+// ============================================================
+
+model Employee {
+  id           String        @id @default(cuid())
+  employeeId   String        @unique  // e.g. E001
+  userId       String        @unique
+  name         String
+  email        String        @unique
+  phone        String?
+  departmentId String?
+  designation  String?
+  joiningDate  DateTime
+  profilePhoto String?
+  status       AccountStatus @default(ACTIVE)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department   Department?   @relation(fields: [departmentId], references: [id])
+  attendances  Attendance[]
+  leaveRequests LeaveRequest[]
+  corrections  AttendanceCorrection[]
+  foodOrders   FoodOrder[]
+
+  @@map("employees")
+}
+
+// ============================================================
+// ATTENDANCE
+// ============================================================
+
+model Attendance {
+  id               String           @id @default(cuid())
+  employeeId       String
+  date             DateTime         @db.Date
+  entryTime        DateTime?
+  exitTime         DateTime?
+  totalWorkMinutes Int?             // in minutes
+  totalBreakMinutes Int?            // in minutes
+  overtimeMinutes  Int?             // in minutes
+  lateMinutes      Int?             // in minutes
+  status           AttendanceStatus @default(ABSENT)
+  isLate           Boolean          @default(false)
+  isOvertime       Boolean          @default(false)
+  isMissingCheckout Boolean         @default(false)
+  notes            String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  employee   Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  breaks     Break[]
+  corrections AttendanceCorrection[]
+
+  @@unique([employeeId, date])
+  @@index([date])
+  @@index([employeeId])
+  @@map("attendance")
+}
+
+// ============================================================
+// BREAKS
+// ============================================================
+
+model Break {
+  id           String    @id @default(cuid())
+  attendanceId String
+  startTime    DateTime
+  endTime      DateTime?
+  durationMinutes Int?   // calculated on end
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  attendance Attendance @relation(fields: [attendanceId], references: [id], onDelete: Cascade)
+
+  @@map("breaks")
+}
+
+// ============================================================
+// LEAVE REQUESTS
+// ============================================================
+
+model LeaveRequest {
+  id           String      @id @default(cuid())
+  employeeId   String
+  leaveType    LeaveType
+  startDate    DateTime    @db.Date
+  endDate      DateTime    @db.Date
+  totalDays    Int
+  reason       String
+  status       LeaveStatus @default(PENDING)
+  adminComment String?
+  reviewedBy   String?     // admin userId
+  reviewedAt   DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@index([status])
+  @@map("leave_requests")
+}
+
+// ============================================================
+// HOLIDAYS
+// ============================================================
+
+model Holiday {
+  id          String   @id @default(cuid())
+  name        String
+  date        DateTime @db.Date
+  description String?
+  isRecurring Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([date])
+  @@map("holidays")
+}
+
+// ============================================================
+// ATTENDANCE CORRECTIONS
+// ============================================================
+
+model AttendanceCorrection {
+  id             String           @id @default(cuid())
+  attendanceId   String?
+  employeeId     String
+  date           DateTime         @db.Date
+  requestedEntry DateTime?
+  requestedExit  DateTime?
+  reason         String
+  status         CorrectionStatus @default(PENDING)
+  adminComment   String?
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  attendance Attendance? @relation(fields: [attendanceId], references: [id])
+  employee   Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@map("attendance_corrections")
+}
+
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  type      String   // INFO, SUCCESS, WARNING, ERROR
+  isRead    Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("notifications")
+}
+
+// ============================================================
+// AUDIT LOGS
+// ============================================================
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  adminId     String?
+  userId      String?
+  action      AuditAction
+  entityType  String?     // Employee, Attendance, Leave, etc.
+  entityId    String?
+  description String
+  metadata    Json?
+  ipAddress   String?
+  createdAt   DateTime    @default(now())
+
+  admin User? @relation("AuditAdmin", fields: [adminId], references: [id])
+  user  User? @relation("AuditUser", fields: [userId], references: [id])
+
+  @@index([adminId])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+// ============================================================
+// COMPANY SETTINGS
+// ============================================================
+
+model CompanySetting {
+  id                  String   @id @default(cuid())
+  companyName         String   @default("My Company")
+  officeStartTime     String   @default("09:00") // HH:mm
+  officeEndTime       String   @default("18:00") // HH:mm
+  requiredHours       Int      @default(480)     // in minutes (8 hours)
+  lateThresholdMinutes Int     @default(15)      // grace period
+  overtimeThresholdMinutes Int @default(0)       // after required hours
+  halfDayMinutes      Int      @default(240)     // 4 hours
+  workingDays         String[] @default(["MONDAY","TUESDAY","WEDNESDAY","THURSDAY","FRIDAY"])
+  breakLimitMinutes   Int      @default(60)      // max break per day
+  timezone            String   @default("Asia/Kolkata")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@map("company_settings")
+}
+
+// ============================================================
+// FOOD ORDERING SYSTEM
+// ============================================================
+
+model FoodItem {
+  id          String          @id @default(cuid())
+  name        String
+  description String?
+  category    String          // e.g. "Tea & Coffee", "Milk", "Snacks", "Bakery"
+  price       Float
+  imageUrl    String?
+  isAvailable Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  orderItems  FoodOrderItem[]
+
+  @@map("food_items")
+}
+
+model FoodOrder {
+  id          String          @id @default(cuid())
+  orderNumber String          @unique
+  employeeId  String
+  breakTime   String          // e.g. "Morning Break (10:30 AM)", "Lunch Break (01:00 PM)", etc.
+  status      FoodOrderStatus @default(PENDING)
+  totalAmount Float
+  notes       String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  employee    Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  items       FoodOrderItem[]
+
+  @@index([employeeId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("food_orders")
+}
+
+model FoodOrderItem {
+  id         String    @id @default(cuid())
+  orderId    String
+  foodItemId String
+  itemName   String
+  price      Float
+  quantity   Int
+  subtotal   Float
+
+  order      FoodOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  foodItem   FoodItem  @relation(fields: [foodItemId], references: [id])
+
+  @@map("food_order_items")
+}
+
+// ============================================================
+// LIVE CHAT SYSTEM
+// ============================================================
+
+enum ConversationType {
+  DIRECT
+  GROUP
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  DOCUMENT
+  ORDER_ALERT
+  LEAVE_NOTICE
+  CALL_LOG
+  AUDIO
+  VIDEO
+}
+
+enum CallType {
+  AUDIO
+  VIDEO
+}
+
+enum CallStatus {
+  INITIATED
+  RINGING
+  ONGOING
+  COMPLETED
+  MISSED
+  REJECTED
+  BUSY
+  CANCELLED
+}
+
+enum ParticipantCallStatus {
+  INVITED
+  JOINED
+  REJECTED
+  MISSED
+  LEFT
+}
+
+model ChatConversation {
+  id               String           @id @default(cuid())
+  conversationType ConversationType @default(DIRECT) @map("conversation_type")
+  title            String?
+  description      String?
+  avatarUrl        String?          @map("avatar_url")
+  createdById      String?          @map("created_by_id")
+  groupTheme       Json?            @map("group_theme")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  creator          User?            @relation("CreatedConversations", fields: [createdById], references: [id], onDelete: SetNull)
+  participants     ChatParticipant[]
+  messages         ChatMessage[]
+  callRecords      CallRecord[]
+
+  @@map("chat_conversations")
+}
+
+model ChatParticipant {
+  id             String           @id @default(cuid())
+  conversationId String           @map("conversation_id")
+  userId         String           @map("user_id")
+  joinedAt       DateTime         @default(now()) @map("joined_at")
+  lastReadAt     DateTime?        @map("last_read_at")
+
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@index([conversationId])
+  @@map("chat_participants")
+}
+
+model ChatMessage {
+  id             String           @id @default(cuid())
+  conversationId String           @map("conversation_id")
+  senderId       String           @map("sender_id")
+  messageType    MessageType      @default(TEXT) @map("message_type")
+  messageContent String           @map("message_content") @db.Text
+  attachmentUrl  String?          @map("attachment_url")
+  attachmentName String?          @map("attachment_name")
+  attachmentSize Int?             @map("attachment_size")
+  attachmentType String?          @map("attachment_type")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  deliveredAt    DateTime?        @map("delivered_at")
+  readAt         DateTime?        @map("read_at")
+  isDeleted      Boolean          @default(false) @map("is_deleted")
+  isPinned       Boolean          @default(false) @map("is_pinned")
+  pinnedAt       DateTime?        @map("pinned_at")
+  isForwarded    Boolean          @default(false) @map("is_forwarded")
+
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User             @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  notifications  ChatNotification[]
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@map("chat_messages")
+}
+
+model ChatNotification {
+  id          String      @id @default(cuid())
+  recipientId String      @map("recipient_id")
+  messageId   String      @map("message_id")
+  isRead      Boolean     @default(false) @map("is_read")
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  recipient   User        @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  message     ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, isRead])
+  @@index([messageId])
+  @@map("chat_notifications")
+}
+
+model UserChatTheme {
+  id             String    @id @default(cuid())
+  userId         String    @unique @map("user_id")
+  themeId        String    @default("classic-blue") @map("theme_id")
+  mode           String    @default("light") // "light" | "dark"
+  primaryColor   String?   @map("primary_color")
+  bubbleColor    String?   @map("bubble_color")
+  bgPattern      String?   @map("bg_pattern")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_chat_themes")
+}
+
+model CallRecord {
+  id              String         @id @default(cuid())
+  conversationId  String         @map("conversation_id")
+  callerId        String         @map("caller_id")
+  callType        CallType       @default(AUDIO) @map("call_type")
+  isGroup         Boolean        @default(false) @map("is_group")
+  status          CallStatus     @default(INITIATED)
+  startedAt       DateTime       @default(now()) @map("started_at")
+  endedAt         DateTime?      @map("ended_at")
+  durationSeconds Int            @default(0) @map("duration_seconds")
+  metadata        Json?
+
+  conversation    ChatConversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  caller          User              @relation("InitiatedCalls", fields: [callerId], references: [id], onDelete: Cascade)
+  participants    CallParticipant[]
+
+  @@index([conversationId])
+  @@index([callerId])
+  @@index([status])
+  @@map("call_records")
+}
+
+model CallParticipant {
+  id              String                 @id @default(cuid())
+  callId          String                 @map("call_id")
+  userId          String                 @map("user_id")
+  status          ParticipantCallStatus  @default(INVITED)
+  joinedAt        DateTime?              @map("joined_at")
+  leftAt          DateTime?              @map("left_at")
+  durationSeconds Int                    @default(0) @map("duration_seconds")
+
+  call            CallRecord             @relation(fields: [callId], references: [id], onDelete: Cascade)
+  user            User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([callId, userId])
+  @@index([userId])
+  @@index([callId])
+  @@map("call_participants")
+}
